@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "dxvk_state_cache_types.h"
+#include <unordered_set>
 
 namespace dxvk {
 
@@ -77,6 +78,15 @@ namespace dxvk {
     void stopWorkerThreads();
 
     /**
+     * \brief Precompile all currently possible pipelines
+     *
+     * Iterate all unique pipeline keys from the state cache and enqueue
+     * compilation jobs for those whose shaders are already registered.
+     * Safe to call multiple times.
+     */
+    void precompileAllAvailablePipelines();
+
+    /**
      * \brief Checks whether compiler threads are busy
      * \returns \c true if we're compiling shaders
      */
@@ -92,7 +102,7 @@ namespace dxvk {
       DxvkGraphicsPipelineShaders gp;
       DxvkComputePipelineShaders  cp;
     };
-
+    std::unordered_set<DxvkStateCacheKey, DxvkHash, DxvkEq> m_enqueuedKeys;
     DxvkDevice*                       m_device;
     DxvkPipelineManager*              m_pipeManager;
     DxvkRenderPassPool*               m_passManager;

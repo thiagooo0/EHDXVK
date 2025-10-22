@@ -1,8 +1,10 @@
 #include "dxvk_device.h"
 #include "dxvk_pipemanager.h"
 #include "dxvk_state_cache.h"
+#include <unordered_set>
 
 namespace dxvk {
+ std::atomic<uint64_t> g_precompile_runs{0};
 
   static const Sha1Hash       g_nullHash      = Sha1Hash::compute(nullptr, 0);
   static const DxvkShaderKey  g_nullShaderKey = DxvkShaderKey();
@@ -286,6 +288,51 @@ namespace dxvk {
     }
   }
 
+    void DxvkStateCache::precompileAllAvailablePipelines() {
+        size_t queued = 0;
+
+    // Gather unique pipeline keys from the cache
+    std::unordered_set<DxvkStateCacheKey, DxvkHash, DxvkEq> uniqueKeys;
+    {
+      std::unique_lock<dxvk::mutex> lock(m_entryLock);
+      for (const auto& kv : m_entryMap)
+        uniqueKeys.insert(kv.first);
+    }
+
+    // Enqueue compilations for keys whose shaders are all registered.
+    std::unique_lock<dxvk::mutex> workerLock(m_workerLock);
+
+    for (const auto& key : uniqueKeys) {
+      WorkerItem item = {};
+      const bool isCompute = !key.cs.eq(g_nullShaderKey);
+      bool ok = true;
+
+      if (isCompute) {
+        ok = getShaderByKey(key.cs, item.cp.cs);
+      } else {
+        ok =  getShaderByKey(key.vs,  item.gp.vs)
+           && getShaderByKey(key.tcs, item.gp.tcs)
+           && getShaderByKey(key.tes, item.gp.tes)
+           && getShaderByKey(key.gs,  item.gp.gs)
+           && getShaderByKey(key.fs,  item.gp.fs);
+      }
+
+      if (!ok)
+        continue;
+ if (m_enqueuedKeys.insert(key).second) {
+      m_workerQueue.push(item);
+      ++queued;
+    }
+      m_workerQueue.push(item);
+    }
+
+    workerLock.unlock();
+     if (queued) {
+    m_workerCond.notify_all();
+    createWorkers();
+    g_precompile_runs.fetch_add(1, std::memory_order_relaxed);
+  }
+   }
 
   void DxvkStateCache::stopWorkerThreads() {
     { std::lock_guard<dxvk::mutex> workerLock(m_workerLock);

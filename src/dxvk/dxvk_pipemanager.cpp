@@ -88,5 +88,9 @@ namespace dxvk {
     if (m_stateCache != nullptr)
       m_stateCache->stopWorkerThreads();
   }
-  
+
+  void DxvkPipelineManager::precompileAllAvailable() {
+    if (m_stateCache != nullptr)
+      m_stateCache->precompileAllAvailablePipelines();
+  }
 }

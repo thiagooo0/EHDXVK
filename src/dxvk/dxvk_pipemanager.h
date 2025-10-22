@@ -95,6 +95,11 @@ namespace dxvk {
      * \brief Stops async compiler threads
      */
     void stopWorkerThreads() const;
+
+    /**
+    * \brief Precompile all currently-available pipelines in the state cache
+    */
+    void precompileAllAvailable();
     
   private:
     

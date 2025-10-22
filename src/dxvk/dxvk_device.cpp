@@ -196,6 +196,10 @@ namespace dxvk {
 
   void DxvkDevice::registerShader(const Rc<DxvkShader>& shader) {
     m_objects.pipelineManager().registerShader(shader);
+    // Optional precompile: enqueue all pipelines that are currently resolvable
+    Logger::info("[DXVK] [registerShader]");
+    Logger::info("[DXVK] [registerShader] precompileAllAvailable");
+      m_objects.pipelineManager().precompileAllAvailable();
   }
   
   
