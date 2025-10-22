@@ -2,6 +2,7 @@
 
 #include <iomanip>
 #include <version.h>
+#include "../dxvk_precompile_stats.h"
 
 namespace dxvk::hud {
 
@@ -88,11 +89,27 @@ namespace dxvk::hud {
           HudPos            position) {
     position.y += 16.0f;
 
-    renderer.drawText(16.0f,
-      { position.x, position.y },
-      { 1.0f, 1.0f, 1.0f, 1.0f },
-      "DXVK " DXVK_VERSION);
+    // renderer.drawText(16.0f,
+    //   { position.x, position.y },
+    //   { 1.0f, 1.0f, 1.0f, 1.0f },
+    //   "[EHANG] " DXVK_VERSION);
+ uint64_t runs = dxvk::g_precompile_runs.load(std::memory_order_relaxed);
+ std::string prefix = "[EHANG";
+ if (runs > 0) {
+   prefix += "#";
+   prefix += std::to_string(runs);
+ }
+ prefix += "] ";
 
+ // Compose final line: prefix + version string
+ std::string line = prefix;
+ line += DXVK_VERSION;
+
+ renderer.drawText(
+   16.0f,
+   { position.x, position.y },
+   { 1.0f, 1.0f, 1.0f, 1.0f },
+   line.c_str());
     position.y += 8.0f;
     return position;
   }
