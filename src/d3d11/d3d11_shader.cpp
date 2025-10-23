@@ -1,6 +1,9 @@
 #include "d3d11_device.h"
 #include "d3d11_shader.h"
 
+#include "../dxvk/dxvk_log_util.h"
+#include "../util/util_time.h"
+
 namespace dxvk {
   
   D3D11CommonShader:: D3D11CommonShader() { }
@@ -14,7 +17,9 @@ namespace dxvk {
     const void*           pShaderBytecode,
           size_t          BytecodeLength) {
     const std::string name = pShaderKey->toString();
-    Logger::debug(str::format("Compiling shader ", name));
+    Logger::info(log::ehang("Compiling shader ", name));
+
+    const auto compileStart = dxvk::high_resolution_clock::now();
     
     DxbcReader reader(
       reinterpret_cast<const char*>(pShaderBytecode),
@@ -44,6 +49,10 @@ namespace dxvk {
       ? module.compilePassthroughShader(*pDxbcModuleInfo, name)
       : module.compile                 (*pDxbcModuleInfo, name);
     m_shader->setShaderKey(*pShaderKey);
+
+    const auto compileEnd = dxvk::high_resolution_clock::now();
+    const auto compileDuration = std::chrono::duration<double, std::milli>(compileEnd - compileStart);
+    Logger::info(log::ehang("Shader ", name, " compiled in ", compileDuration.count(), " ms"));
     
     if (dumpPath.size() != 0) {
       std::ofstream dumpStream(
@@ -71,6 +80,9 @@ namespace dxvk {
       m_buffer = pDevice->GetDXVKDevice()->createBuffer(info, memFlags);
       std::memcpy(m_buffer->mapPtr(0), shaderInfo.uniformData, shaderInfo.uniformSize);
     }
+
+    if (auto cache = pDevice->GetDXVKDevice()->shaderCache(); cache != nullptr)
+      cache->storeShader(m_shader->getShaderKey(), m_shader);
 
     pDevice->GetDXVKDevice()->registerShader(m_shader);
   }

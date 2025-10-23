@@ -1,9 +1,14 @@
 #include <cstring>
 #include <vector>
 #include <utility>
+#include <cstdint>
+#include <iomanip>
 
-#include "dxvk_device.h"
+#include "../util/util_time.h"
+
 #include "dxvk_context.h"
+#include "dxvk_device.h"
+#include "dxvk_log_util.h"
 
 namespace dxvk {
   
@@ -2198,7 +2203,12 @@ namespace dxvk {
   void DxvkContext::uploadBuffer(
     const Rc<DxvkBuffer>&           buffer,
     const void*                     data) {
+    const auto uploadStart = dxvk::high_resolution_clock::now();
     auto bufferSlice = buffer->getSliceHandle();
+    Logger::info(log::ehang("Uploading buffer handle ",
+      uint64_t(reinterpret_cast<uintptr_t>(bufferSlice.handle)),
+      " size=", bufferSlice.length,
+      " dstOffset=", bufferSlice.offset));
 
     auto stagingSlice = m_staging.alloc(CACHE_LINE_SIZE, bufferSlice.length);
     auto stagingHandle = stagingSlice.getSliceHandle();
@@ -2220,9 +2230,15 @@ namespace dxvk {
       m_device->queues().graphics.queueFamily,
       buffer->info().stages,
       buffer->info().access);
-    
+
     m_cmd->trackResource<DxvkAccess::Read>(stagingSlice.buffer());
     m_cmd->trackResource<DxvkAccess::Write>(buffer);
+
+    const auto uploadEnd = dxvk::high_resolution_clock::now();
+    const auto uploadDuration = std::chrono::duration<double, std::milli>(uploadEnd - uploadStart);
+    Logger::info(log::ehang("Uploaded buffer handle ",
+      uint64_t(reinterpret_cast<uintptr_t>(bufferSlice.handle)),
+      " in ", uploadDuration.count(), " ms"));
   }
 
 
@@ -2232,12 +2248,23 @@ namespace dxvk {
     const void*                     data,
           VkDeviceSize              pitchPerRow,
           VkDeviceSize              pitchPerLayer) {
+    const auto uploadStart = dxvk::high_resolution_clock::now();
+    const auto& info = image->info();
+    Logger::info(log::ehang("Uploading image handle ",
+      uint64_t(reinterpret_cast<uintptr_t>(image->handle())),
+      " fmt=", uint32_t(info.format),
+      " mip=", subresources.mipLevel,
+      " layers=", subresources.layerCount,
+      " aspect=0x", std::hex, uint32_t(subresources.aspectMask), std::dec,
+      " pitchPerRow=", pitchPerRow,
+      " pitchPerLayer=", pitchPerLayer));
+
     VkOffset3D imageOffset = { 0, 0, 0 };
     VkExtent3D imageExtent = image->mipLevelExtent(subresources.mipLevel);
 
     DxvkCmdBuffer cmdBuffer = DxvkCmdBuffer::SdmaBuffer;
     DxvkBarrierSet* barriers = &m_sdmaAcquires;
-    
+
     if (subresources.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
       cmdBuffer = DxvkCmdBuffer::InitBuffer;
       barriers = &m_initBarriers;
@@ -2279,8 +2306,14 @@ namespace dxvk {
         image->info().stages,
         image->info().access);
     }
-    
+
     m_cmd->trackResource<DxvkAccess::Write>(image);
+
+    const auto uploadEnd = dxvk::high_resolution_clock::now();
+    const auto uploadDuration = std::chrono::duration<double, std::milli>(uploadEnd - uploadStart);
+    Logger::info(log::ehang("Uploaded image handle ",
+      uint64_t(reinterpret_cast<uintptr_t>(image->handle())),
+      " in ", uploadDuration.count(), " ms"));
   }
 
 

@@ -325,6 +325,10 @@ namespace dxvk {
     Rc<DxvkShader> shader = generator.finalize();
 
     shader->setShaderKey(key);
+
+    if (auto cache = pDevice->GetDXVKDevice()->shaderCache(); cache != nullptr)
+      cache->storeShader(shader->getShaderKey(), shader);
+
     pDevice->GetDXVKDevice()->registerShader(shader);
 
     const std::string dumpPath = env::getEnvVar("DXVK_SHADER_DUMP_PATH");

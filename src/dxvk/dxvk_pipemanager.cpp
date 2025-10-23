@@ -1,4 +1,5 @@
 #include "dxvk_device.h"
+#include "dxvk_log_util.h"
 #include "dxvk_pipemanager.h"
 #include "dxvk_state_cache.h"
 
@@ -15,8 +16,12 @@ namespace dxvk {
     if (useAsync == "1" || device->config().enableAsync)
       m_compiler = new DxvkPipelineCompiler(device);
     
-    if (useStateCache != "0" && device->config().enableStateCache)
+    if (useStateCache != "0" && device->config().enableStateCache) {
+      Logger::info(log::ehang("Creating state cache instance"));
       m_stateCache = new DxvkStateCache(device, this, passManager);
+    } else {
+      Logger::info(log::ehang("State cache disabled, skipping initialization"));
+    }
   }
   
   
@@ -89,7 +94,7 @@ namespace dxvk {
       m_stateCache->stopWorkerThreads();
   }
 
-  void DxvkPipelineManager::precompileAllAvailable() {
+  void DxvkPipelineManager::precompileAllAvailablePipelines() {
     if (m_stateCache != nullptr)
       m_stateCache->precompileAllAvailablePipelines();
   }

@@ -108,6 +108,11 @@ The following environment variables can be used to control the cache:
 - `DXVK_STATE_CACHE=0` Disables the state cache.
 - `DXVK_STATE_CACHE_PATH=/some/directory` Specifies a directory where to put the cache files. Defaults to the current working directory of the application.
 
+### Shader cache
+DXVK can also persist compiled SPIR-V shader modules to disk in order to avoid compiling the same shader repeatedly across application runs. The cache is enabled by default and can be toggled via the configuration option `dxvk.shaderCache = True|False`. When disabled, DXVK will stop writing new shader cache entries.
+
+The shader cache uses the directory specified by the `DXVK_SHADER_CACHE_PATH` environment variable when set, or falls back to `DXVK_STATE_CACHE_PATH` and finally the application's working directory.
+
 ### Debugging
 The following environment variables can be used for **debugging** purposes.
 - `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation` Enables Vulkan debug layers. Highly recommended for troubleshooting rendering issues and driver crashes. Requires the Vulkan SDK to be installed on the host system.

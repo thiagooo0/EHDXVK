@@ -21,6 +21,7 @@
 #include "dxvk_renderpass.h"
 #include "dxvk_sampler.h"
 #include "dxvk_shader.h"
+#include "dxvk_shader_cache.h"
 #include "dxvk_stats.h"
 #include "dxvk_unbound.h"
 
@@ -388,6 +389,10 @@ namespace dxvk {
      */
     void registerShader(
       const Rc<DxvkShader>&         shader);
+
+    Rc<DxvkShaderCache> shaderCache() const {
+      return m_shaderCache;
+    }
     
     /**
      * \brief Presents a swap chain image
@@ -500,6 +505,8 @@ namespace dxvk {
     
     DxvkDevicePerfHints         m_perfHints;
     DxvkObjects                 m_objects;
+
+    Rc<DxvkShaderCache>         m_shaderCache;
 
     sync::Spinlock              m_statLock;
     DxvkStatCounters            m_statCounters;

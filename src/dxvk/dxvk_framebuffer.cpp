@@ -1,5 +1,12 @@
 #include "dxvk_framebuffer.h"
 
+#include "../util/util_time.h"
+
+#include "dxvk_log_util.h"
+
+#include <iomanip>
+#include <sstream>
+
 namespace dxvk {
   
   DxvkFramebufferInfo::DxvkFramebufferInfo() {
@@ -149,15 +156,32 @@ namespace dxvk {
   : m_vkd(vkd), m_key(info.key()) {
     std::array<VkImageView, MaxNumRenderTargets + 1> views;
     uint32_t attachmentCount = 0;
-    
+
+    std::ostringstream summary;
+    summary << "size=" << info.size().width << "x" << info.size().height
+            << " layers=" << info.size().layers
+            << " renderPass=0x" << std::hex
+            << uint64_t(reinterpret_cast<uintptr_t>(info.renderPass()->getDefaultHandle())) << std::dec;
+
     for (uint32_t i = 0; i < MaxNumRenderTargets; i++) {
-      if (info.getColorTarget(i).view != nullptr)
+      if (info.getColorTarget(i).view != nullptr) {
         views[attachmentCount++] = info.getColorTarget(i).view->handle();
+        summary << " color[" << i << "]=0x" << std::hex
+                << uint64_t(reinterpret_cast<uintptr_t>(info.getColorTarget(i).view->handle()))
+                << std::dec;
+      }
     }
-    
-    if (info.getDepthTarget().view != nullptr)
+
+    if (info.getDepthTarget().view != nullptr) {
       views[attachmentCount++] = info.getDepthTarget().view->handle();
-    
+      summary << " depth=0x" << std::hex
+              << uint64_t(reinterpret_cast<uintptr_t>(info.getDepthTarget().view->handle()))
+              << std::dec;
+    }
+
+    const auto createStart = dxvk::high_resolution_clock::now();
+    Logger::info(log::ehang("Creating framebuffer ", summary.str()));
+
     VkFramebufferCreateInfo fbInfo;
     fbInfo.sType                = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fbInfo.pNext                = nullptr;
@@ -169,8 +193,14 @@ namespace dxvk {
     fbInfo.height               = info.size().height;
     fbInfo.layers               = info.size().layers;
     
-    if (m_vkd->vkCreateFramebuffer(m_vkd->device(), &fbInfo, nullptr, &m_handle) != VK_SUCCESS)
+    if (m_vkd->vkCreateFramebuffer(m_vkd->device(), &fbInfo, nullptr, &m_handle) != VK_SUCCESS) {
       Logger::err("DxvkFramebuffer: Failed to create framebuffer object");
+      Logger::err(log::ehang("Framebuffer creation failed for ", summary.str()));
+    } else {
+      const auto createEnd = dxvk::high_resolution_clock::now();
+      const auto createDuration = std::chrono::duration<double, std::milli>(createEnd - createStart);
+      Logger::info(log::ehang("Framebuffer created in ", createDuration.count(), " ms"));
+    }
   }
   
   

@@ -1,7 +1,11 @@
 #include "../util/util_time.h"
 
+#include <iomanip>
+#include <sstream>
+
 #include "dxvk_device.h"
 #include "dxvk_graphics.h"
+#include "dxvk_log_util.h"
 #include "dxvk_pipemanager.h"
 #include "dxvk_spec_const.h"
 #include "dxvk_state_cache.h"
@@ -113,11 +117,15 @@ namespace dxvk {
   DxvkGraphicsPipelineInstance* DxvkGraphicsPipeline::createInstance(
     const DxvkGraphicsPipelineStateInfo& state,
     const DxvkRenderPass*                renderPass) {
-    VkPipeline pipeline = this->createPipeline(state, renderPass);
+    const uint64_t pipelineId = m_pipeMgr->allocatePipelineId();
+    VkPipeline pipeline = this->createPipeline(state, renderPass, pipelineId);
+
+    if (pipeline == VK_NULL_HANDLE)
+      return nullptr;
 
     std::lock_guard<dxvk::mutex> lock(m_mutex2);
     m_pipeMgr->m_numGraphicsPipelines += 1;
-    return &(*m_pipelines.emplace(state, renderPass, pipeline));
+    return &(*m_pipelines.emplace(state, renderPass, pipelineId, pipeline));
   }
   
   
@@ -125,22 +133,186 @@ namespace dxvk {
     const DxvkGraphicsPipelineStateInfo& state,
     const DxvkRenderPass*                renderPass) {
     std::lock_guard<dxvk::mutex> lock(m_mutex2);
+
+    auto describeRenderPass = [] (const DxvkRenderPass* rp) {
+      if (rp == nullptr)
+        return std::string("<null>");
+
+      std::ostringstream ss;
+      const DxvkRenderPassFormat format = rp->format();
+      ss << "ptr=" << rp
+         << " default=0x" << std::hex << uint64_t(rp->getDefaultHandle()) << std::dec
+         << " samples=" << uint32_t(format.sampleCount);
+
+      if (format.color[0].format != VK_FORMAT_UNDEFINED)
+        ss << " color0=fmt" << uint32_t(format.color[0].format)
+           << "/layout" << uint32_t(format.color[0].layout);
+
+      if (format.depth.format != VK_FORMAT_UNDEFINED)
+        ss << " depth=fmt" << uint32_t(format.depth.format)
+           << "/layout" << uint32_t(format.depth.layout);
+
+      return ss.str();
+    };
+
     for (auto& instance : m_pipelines) {
       if (instance.isCompatible(state, renderPass))
         return &instance;
+
+      if (instance.stateVector() == state && instance.renderPass() != renderPass) {
+        Logger::info(log::ehang(
+          "Pipeline state matches cached pipeline #", instance.pipelineId(),
+          " but render pass differs cached=", describeRenderPass(instance.renderPass()),
+          " requested=", describeRenderPass(renderPass)));
+      }
     }
-    
+
     return nullptr;
   }
   
   
   VkPipeline DxvkGraphicsPipeline::createPipeline(
     const DxvkGraphicsPipelineStateInfo& state,
-    const DxvkRenderPass*                renderPass) const {
-    if (Logger::logLevel() <= LogLevel::Debug) {
-      Logger::debug("Compiling graphics pipeline...");
-      this->logPipelineState(LogLevel::Debug, state);
-    }
+    const DxvkRenderPass*                renderPass,
+          uint64_t                      pipelineId) const {
+    auto shaderName = [] (const Rc<DxvkShader>& shader) {
+      return shader != nullptr ? shader->debugName() : std::string("<null>");
+    };
+
+    auto stringifyRenderPass = [&renderPass] () {
+      const DxvkRenderPassFormat format = renderPass->format();
+      std::ostringstream ss;
+      ss << "ptr=" << renderPass
+         << " default=0x" << std::hex << uint64_t(renderPass->getDefaultHandle()) << std::dec
+         << " samples=" << uint32_t(format.sampleCount);
+
+      for (uint32_t i = 0; i < MaxNumRenderTargets; i++) {
+        if (format.color[i].format != VK_FORMAT_UNDEFINED) {
+          ss << " color[" << i << "]={fmt=" << uint32_t(format.color[i].format)
+             << ",layout=" << uint32_t(format.color[i].layout) << "}";
+        }
+      }
+
+      if (format.depth.format != VK_FORMAT_UNDEFINED) {
+        ss << " depth={fmt=" << uint32_t(format.depth.format)
+           << ",layout=" << uint32_t(format.depth.layout) << "}";
+      }
+
+      return ss.str();
+    };
+
+    auto stringifyAttributes = [&state] () {
+      std::ostringstream ss;
+      if (state.il.attributeCount() == 0) {
+        ss << "none";
+      } else {
+        for (uint32_t i = 0; i < state.il.attributeCount(); i++) {
+          const auto& attr = state.ilAttributes[i];
+          ss << "[loc=" << attr.location() << " bind=" << attr.binding()
+             << " fmt=" << uint32_t(attr.format())
+             << " offset=" << attr.offset() << "]";
+          if (i + 1 < state.il.attributeCount())
+            ss << ' ';
+        }
+      }
+      return ss.str();
+    };
+
+    auto stringifyBindings = [&state] () {
+      std::ostringstream ss;
+      if (state.il.bindingCount() == 0) {
+        ss << "none";
+      } else {
+        for (uint32_t i = 0; i < state.il.bindingCount(); i++) {
+          const auto& bind = state.ilBindings[i];
+          ss << "[binding=" << bind.binding()
+             << " stride=" << bind.stride()
+             << " rate=" << uint32_t(bind.inputRate())
+             << " divisor=" << bind.divisor() << "]";
+          if (i + 1 < state.il.bindingCount())
+            ss << ' ';
+        }
+      }
+      return ss.str();
+    };
+
+    auto stringifyRasterizer = [&state] () {
+      std::ostringstream ss;
+      ss << "cull=" << uint32_t(state.rs.cullMode())
+         << " frontFace=" << uint32_t(state.rs.frontFace())
+         << " polygonMode=" << uint32_t(state.rs.polygonMode())
+         << " depthBias=" << state.rs.depthBiasEnable()
+         << " depthClip=" << state.rs.depthClipEnable()
+         << " conservative=" << uint32_t(state.rs.conservativeMode())
+         << " viewports=" << state.rs.viewportCount();
+      return ss.str();
+    };
+
+    auto stringifyMultisample = [&state] () {
+      std::ostringstream ss;
+      ss << "samples=" << uint32_t(state.ms.sampleCount())
+         << " mask=0x" << std::hex << state.ms.sampleMask() << std::dec
+         << " alphaToCoverage=" << state.ms.enableAlphaToCoverage();
+      return ss.str();
+    };
+
+    auto stringifyDepthStencil = [&state] () {
+      std::ostringstream ss;
+      ss << "depthTest=" << state.ds.enableDepthTest()
+         << " depthWrite=" << state.ds.enableDepthWrite()
+         << " compare=" << uint32_t(state.ds.depthCompareOp())
+         << " bounds=" << state.ds.enableDepthBoundsTest()
+         << " stencil=" << state.ds.enableStencilTest();
+      return ss.str();
+    };
+
+    auto stringifyBlend = [&state] () {
+      std::ostringstream ss;
+      ss << "logicOp=" << state.om.enableLogicOp()
+         << " op=" << uint32_t(state.om.logicOp());
+
+      for (uint32_t i = 0; i < MaxNumRenderTargets; i++) {
+        const auto& blend = state.omBlend[i];
+        if (blend.blendEnable() || blend.colorWriteMask() != 0) {
+          ss << " target[" << i << "]={enable=" << blend.blendEnable()
+             << " mask=0x" << std::hex << blend.colorWriteMask() << std::dec
+             << " srcRGB=" << uint32_t(blend.srcColorBlendFactor())
+             << " dstRGB=" << uint32_t(blend.dstColorBlendFactor())
+             << " opRGB=" << uint32_t(blend.colorBlendOp())
+             << " srcA=" << uint32_t(blend.srcAlphaBlendFactor())
+             << " dstA=" << uint32_t(blend.dstAlphaBlendFactor())
+             << " opA=" << uint32_t(blend.alphaBlendOp()) << "}";
+        }
+      }
+
+      return ss.str();
+    };
+
+    Logger::info(log::ehang("Compiling graphics pipeline #", pipelineId));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " shaders VS=", shaderName(m_shaders.vs),
+      " TCS=", shaderName(m_shaders.tcs),
+      " TES=", shaderName(m_shaders.tes),
+      " GS=", shaderName(m_shaders.gs),
+      " FS=", shaderName(m_shaders.fs)));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " IA topology=", uint32_t(state.ia.primitiveTopology()),
+      " restart=", state.ia.primitiveRestart(),
+      " patchVertices=", state.ia.patchVertexCount()));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " vertexAttributes ", stringifyAttributes()));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " vertexBindings ", stringifyBindings()));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " renderPass ", stringifyRenderPass()));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " rasterizer ", stringifyRasterizer()));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " multisample ", stringifyMultisample()));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " depthStencil ", stringifyDepthStencil()));
+    Logger::info(log::ehang("Pipeline #", pipelineId,
+      " blend ", stringifyBlend()));
 
     // Render pass format and image layouts
     DxvkRenderPassFormat passFormat = renderPass->format();
@@ -426,25 +598,21 @@ namespace dxvk {
     if (tsInfo.patchControlPoints == 0)
       info.pTessellationState = nullptr;
     
-    // Time pipeline compilation for debugging purposes
-    dxvk::high_resolution_clock::time_point t0, t1;
+    const auto compileStart = dxvk::high_resolution_clock::now();
 
-    if (Logger::logLevel() <= LogLevel::Debug)
-      t0 = dxvk::high_resolution_clock::now();
-    
     VkPipeline pipeline = VK_NULL_HANDLE;
     if (m_vkd->vkCreateGraphicsPipelines(m_vkd->device(),
           m_pipeMgr->m_cache->handle(), 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
       Logger::err("DxvkGraphicsPipeline: Failed to compile pipeline");
       this->logPipelineState(LogLevel::Error, state);
+      Logger::err(log::ehang("Graphics pipeline #", pipelineId, " failed"));
       return VK_NULL_HANDLE;
     }
-    
-    if (Logger::logLevel() <= LogLevel::Debug) {
-      t1 = dxvk::high_resolution_clock::now();
-      auto td = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0);
-      Logger::debug(str::format("DxvkGraphicsPipeline: Finished in ", td.count(), " ms"));
-    }
+
+    const auto compileEnd = dxvk::high_resolution_clock::now();
+    const auto compileDuration = std::chrono::duration<double, std::milli>(compileEnd - compileStart);
+    Logger::info(log::ehang("Graphics pipeline #", pipelineId,
+      " compiled in ", compileDuration.count(), " ms"));
 
     return pipeline;
   }

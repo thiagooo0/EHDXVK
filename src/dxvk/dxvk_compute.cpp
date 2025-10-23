@@ -1,9 +1,11 @@
 #include <cstring>
+#include <sstream>
 
 #include "../util/util_time.h"
 
 #include "dxvk_compute.h"
 #include "dxvk_device.h"
+#include "dxvk_log_util.h"
 #include "dxvk_pipemanager.h"
 #include "dxvk_spec_const.h"
 #include "dxvk_state_cache.h"
@@ -42,9 +44,14 @@ namespace dxvk {
 
       if (!instance) {
         instance = this->createInstance(state);
-        this->writePipelineStateToCache(state);
+
+        if (instance != nullptr)
+          this->writePipelineStateToCache(state);
       }
     }
+
+    if (!instance)
+      return VK_NULL_HANDLE;
 
     return instance->pipeline();
   }
@@ -61,10 +68,14 @@ namespace dxvk {
   
   DxvkComputePipelineInstance* DxvkComputePipeline::createInstance(
     const DxvkComputePipelineStateInfo& state) {
-    VkPipeline newPipelineHandle = this->createPipeline(state);
+    const uint64_t pipelineId = m_pipeMgr->allocatePipelineId();
+    VkPipeline newPipelineHandle = this->createPipeline(state, pipelineId);
+
+    if (newPipelineHandle == VK_NULL_HANDLE)
+      return nullptr;
 
     m_pipeMgr->m_numComputePipelines += 1;
-    return &(*m_pipelines.emplace(state, newPipelineHandle));
+    return &(*m_pipelines.emplace(state, pipelineId, newPipelineHandle));
   }
 
   
@@ -80,14 +91,48 @@ namespace dxvk {
   
   
   VkPipeline DxvkComputePipeline::createPipeline(
-    const DxvkComputePipelineStateInfo& state) const {
+    const DxvkComputePipelineStateInfo& state,
+          uint64_t                      pipelineId) const {
     std::vector<VkDescriptorSetLayoutBinding> bindings;
 
-    if (Logger::logLevel() <= LogLevel::Debug) {
-      Logger::debug("Compiling compute pipeline..."); 
-      Logger::debug(str::format("  cs  : ", m_shaders.cs->debugName()));
-    }
-    
+    auto stringifyBindingMask = [&state] () {
+      std::ostringstream ss;
+      ss << "[";
+      bool first = true;
+      for (int32_t binding = state.bsBindingMask.findNext(0);
+           binding >= 0;
+           binding = state.bsBindingMask.findNext(binding + 1)) {
+        if (!first)
+          ss << ",";
+        first = false;
+        ss << binding;
+      }
+      ss << "]";
+      return ss.str();
+    };
+
+    auto stringifySpecConstants = [&state] () {
+      std::ostringstream ss;
+      ss << "[";
+      for (uint32_t i = 0; i < DxvkLimits::MaxNumSpecConstants; i++) {
+        if (i)
+          ss << ",";
+        ss << state.sc.specConstants[i];
+      }
+      ss << "]";
+      return ss.str();
+    };
+
+    const std::string shaderName = m_shaders.cs != nullptr
+      ? m_shaders.cs->debugName()
+      : std::string("<null>");
+
+    Logger::info(log::ehang(
+      "Compiling compute pipeline #", pipelineId,
+      " cs=", shaderName,
+      " bindings=", stringifyBindingMask(),
+      " specConstants=", stringifySpecConstants()));
+
     DxvkSpecConstants specData;
     for (uint32_t i = 0; i < m_layout->bindingCount(); i++)
       specData.set(i, state.bsBindingMask.test(i), true);
@@ -111,25 +156,21 @@ namespace dxvk {
     info.basePipelineHandle   = VK_NULL_HANDLE;
     info.basePipelineIndex    = -1;
     
-    // Time pipeline compilation for debugging purposes
-    dxvk::high_resolution_clock::time_point t0, t1;
+    const auto compileStart = dxvk::high_resolution_clock::now();
 
-    if (Logger::logLevel() <= LogLevel::Debug)
-      t0 = dxvk::high_resolution_clock::now();
-    
     VkPipeline pipeline = VK_NULL_HANDLE;
     if (m_vkd->vkCreateComputePipelines(m_vkd->device(),
           m_pipeMgr->m_cache->handle(), 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
       Logger::err("DxvkComputePipeline: Failed to compile pipeline");
-      Logger::err(str::format("  cs  : ", m_shaders.cs->debugName()));
+      Logger::err(log::ehang("Compute pipeline #", pipelineId,
+        " failed cs=", shaderName));
       return VK_NULL_HANDLE;
     }
-    
-    if (Logger::logLevel() <= LogLevel::Debug) {
-      t1 = dxvk::high_resolution_clock::now();
-      auto td = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0);
-      Logger::debug(str::format("DxvkComputePipeline: Finished in ", td.count(), " ms"));
-    }
+
+    const auto compileEnd = dxvk::high_resolution_clock::now();
+    const auto compileDuration = std::chrono::duration<double, std::milli>(compileEnd - compileStart);
+    Logger::info(log::ehang("Compute pipeline #", pipelineId,
+      " compiled in ", compileDuration.count(), " ms"));
 
     return pipeline;
   }
