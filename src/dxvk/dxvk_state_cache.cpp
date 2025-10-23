@@ -1,7 +1,10 @@
 #include "dxvk_device.h"
+#include "dxvk_log_util.h"
 #include "dxvk_pipemanager.h"
 #include "dxvk_state_cache.h"
 #include <unordered_set>
+
+#include "../util/util_string.h"
 
 namespace dxvk {
  std::atomic<uint64_t> g_precompile_runs{0};
@@ -158,10 +161,11 @@ namespace dxvk {
   : m_device      (device),
     m_pipeManager (pipeManager),
     m_passManager (passManager) {
+    Logger::info(log::ehang("Initializing state cache"));
     bool newFile = !readCacheFile();
 
     if (newFile) {
-      Logger::warn("DXVK: Creating new state cache file");
+      Logger::warn(log::ehang("Creating new state cache file"));
 
       // Start with an empty file
       std::ofstream file(getCacheFileName().c_str(),
@@ -251,10 +255,14 @@ namespace dxvk {
 
 
   void DxvkStateCache::registerShader(const Rc<DxvkShader>& shader) {
+    Logger::info(log::ehang("Registering shader with state cache"));
+
     DxvkShaderKey key = shader->getShaderKey();
 
-    if (key.eq(g_nullShaderKey))
+    if (key.eq(g_nullShaderKey)) {
+      Logger::warn(log::ehang("Received shader with null state cache key"));
       return;
+    }
     
     // Add the shader so we can look it up by its key
     std::unique_lock<dxvk::mutex> entryLock(m_entryLock);
@@ -262,6 +270,8 @@ namespace dxvk {
 
     // Deferred lock, don't stall workers unless we have to
     std::unique_lock<dxvk::mutex> workerLock;
+    bool queued = false;
+    uint32_t queuedCount = 0;
 
     auto pipelines = m_pipelineMap.equal_range(key);
 
@@ -275,39 +285,56 @@ namespace dxvk {
        || !getShaderByKey(p->second.fs,  item.gp.fs)
        || !getShaderByKey(p->second.cs,  item.cp.cs))
         continue;
-      
+
       if (!workerLock)
         workerLock = std::unique_lock<dxvk::mutex>(m_workerLock);
-      
+
+      if (!m_enqueuedKeys.insert(p->second).second)
+        continue;
+
       m_workerQueue.push(item);
+      queued = true;
+      queuedCount += 1;
     }
 
     if (workerLock) {
+      if (queued)
+        g_precompile_runs.fetch_add(1, std::memory_order_relaxed);
+
+      if (queuedCount)
+        Logger::info(log::ehang("Enqueued ", queuedCount, " pipelines from state cache after shader registration"));
+
       m_workerCond.notify_all();
       createWorkers();
+    } else {
+      Logger::info(log::ehang("No pipelines waiting for this shader in state cache"));
     }
   }
 
-    void DxvkStateCache::precompileAllAvailablePipelines() {
-        size_t queued = 0;
+  void DxvkStateCache::precompileAllAvailablePipelines() {
+    Logger::info(log::ehang("Precompiling all pipelines available in state cache"));
+    std::vector<DxvkStateCacheKey> uniqueKeys;
+    uniqueKeys.reserve(m_entryMap.size());
 
-    // Gather unique pipeline keys from the cache
-    std::unordered_set<DxvkStateCacheKey, DxvkHash, DxvkEq> uniqueKeys;
     {
       std::unique_lock<dxvk::mutex> lock(m_entryLock);
-      for (const auto& kv : m_entryMap)
-        uniqueKeys.insert(kv.first);
+      for (const auto& entry : m_entryMap)
+        uniqueKeys.push_back(entry.first);
     }
 
-    // Enqueue compilations for keys whose shaders are all registered.
+    if (uniqueKeys.empty()) {
+      Logger::info(log::ehang("State cache contains no complete pipeline entries"));
+      return;
+    }
+
+    size_t queued = 0;
     std::unique_lock<dxvk::mutex> workerLock(m_workerLock);
 
     for (const auto& key : uniqueKeys) {
-      WorkerItem item = {};
-      const bool isCompute = !key.cs.eq(g_nullShaderKey);
-      bool ok = true;
+      WorkerItem item = { };
+      bool ok = false;
 
-      if (isCompute) {
+      if (!key.cs.eq(g_nullShaderKey)) {
         ok = getShaderByKey(key.cs, item.cp.cs);
       } else {
         ok =  getShaderByKey(key.vs,  item.gp.vs)
@@ -319,22 +346,28 @@ namespace dxvk {
 
       if (!ok)
         continue;
- if (m_enqueuedKeys.insert(key).second) {
+
+      if (!m_enqueuedKeys.insert(key).second)
+        continue;
+
       m_workerQueue.push(item);
-      ++queued;
-    }
-      m_workerQueue.push(item);
+      queued += 1;
     }
 
     workerLock.unlock();
-     if (queued) {
-    m_workerCond.notify_all();
-    createWorkers();
-    g_precompile_runs.fetch_add(1, std::memory_order_relaxed);
+
+    if (queued) {
+      m_workerCond.notify_all();
+      createWorkers();
+      g_precompile_runs.fetch_add(1, std::memory_order_relaxed);
+      Logger::info(log::ehang("Queued ", queued, " pipelines from state cache for precompilation"));
+    } else {
+      Logger::info(log::ehang("No complete pipeline sets available for precompilation"));
+    }
   }
-   }
 
   void DxvkStateCache::stopWorkerThreads() {
+    Logger::info(log::ehang("Stopping state cache worker and writer threads"));
     { std::lock_guard<dxvk::mutex> workerLock(m_workerLock);
       std::lock_guard<dxvk::mutex> writerLock(m_writerLock);
 
@@ -389,6 +422,7 @@ namespace dxvk {
 
 
   void DxvkStateCache::compilePipelines(const WorkerItem& item) {
+    Logger::info(log::ehang("Compiling pipelines from state cache entry"));
     DxvkStateCacheKey key;
     key.vs  = getShaderKey(item.gp.vs);
     key.tcs = getShaderKey(item.gp.tcs);
@@ -396,6 +430,8 @@ namespace dxvk {
     key.gs  = getShaderKey(item.gp.gs);
     key.fs  = getShaderKey(item.gp.fs);
     key.cs  = getShaderKey(item.cp.cs);
+
+    size_t compiled = 0;
 
     if (item.cp.cs == nullptr) {
       auto pipeline = m_pipeManager->createGraphicsPipeline(item.gp);
@@ -407,6 +443,7 @@ namespace dxvk {
         if (m_passManager->validateRenderPassFormat(entry.format)) {
           auto rp = m_passManager->getRenderPass(entry.format);
           pipeline->compilePipeline(entry.gpState, rp);
+          compiled += 1;
         }
       }
     } else {
@@ -416,17 +453,27 @@ namespace dxvk {
       for (auto e = entries.first; e != entries.second; e++) {
         const auto& entry = m_entries[e->second];
         pipeline->compilePipeline(entry.cpState);
+        compiled += 1;
       }
     }
+
+    const char* pipelineType = item.cp.cs == nullptr ? "graphics" : "compute";
+    Logger::info(log::ehang(
+      "Compiled ", compiled,
+      " ", pipelineType,
+      " pipelines from state cache"));
   }
 
 
   bool DxvkStateCache::readCacheFile() {
     // Open state file and just fail if it doesn't exist
-    std::ifstream ifile(getCacheFileName().c_str(), std::ios_base::binary);
+    std::wstring cacheFileName = getCacheFileName();
+    Logger::info(log::ehang("Opening state cache file ", str::fromws(cacheFileName.c_str())));
+
+    std::ifstream ifile(cacheFileName.c_str(), std::ios_base::binary);
 
     if (!ifile) {
-      Logger::warn("DXVK: No state cache file found");
+      Logger::warn(log::ehang("No state cache file found"));
       return false;
     }
 
@@ -436,7 +483,7 @@ namespace dxvk {
     DxvkStateCacheHeader curHeader;
 
     if (!readCacheHeader(ifile, curHeader)) {
-      Logger::warn("DXVK: Failed to read state cache header");
+      Logger::warn(log::ehang("Failed to read state cache header"));
       return false;
     }
 
@@ -453,19 +500,19 @@ namespace dxvk {
       expectedSize = sizeof(DxvkStateCacheEntry);
 
     if (curHeader.entrySize != expectedSize) {
-      Logger::warn("DXVK: State cache entry size changed");
+      Logger::warn(log::ehang("State cache entry size changed"));
       return false;
     }
 
     // Discard caches of unsupported versions
     if (curHeader.version < 2 || curHeader.version > newHeader.version) {
-      Logger::warn("DXVK: State cache version not supported");
+      Logger::warn(log::ehang("State cache version not supported"));
       return false;
     }
 
     // Notify user about format conversion
     if (curHeader.version != newHeader.version)
-      Logger::warn(str::format("DXVK: Updating state cache version to v", newHeader.version));
+      Logger::warn(log::ehang("Updating state cache version to v", newHeader.version));
 
     // Read actual cache entries from the file.
     // If we encounter invalid entries, we should
@@ -492,13 +539,13 @@ namespace dxvk {
       }
     }
 
-    Logger::info(str::format(
-      "DXVK: Read ", m_entries.size(),
+    Logger::info(log::ehang(
+      "Read ", m_entries.size(),
       " valid state cache entries"));
 
     if (numInvalidEntries) {
-      Logger::warn(str::format(
-        "DXVK: Skipped ", numInvalidEntries,
+      Logger::warn(log::ehang(
+        "Skipped ", numInvalidEntries,
         " invalid state cache entries"));
       return false;
     }
@@ -957,6 +1004,7 @@ namespace dxvk {
 
 
   void DxvkStateCache::workerFunc() {
+    Logger::info(log::ehang("State cache worker thread running"));
     env::setThreadName("dxvk-shader");
 
     while (!m_stopThreads.load()) {
@@ -984,10 +1032,13 @@ namespace dxvk {
 
       compilePipelines(item);
     }
+
+    Logger::info(log::ehang("State cache worker thread exiting"));
   }
 
 
   void DxvkStateCache::writerFunc() {
+    Logger::info(log::ehang("State cache writer thread running"));
     env::setThreadName("dxvk-writer");
 
     std::ofstream file;
@@ -1016,7 +1067,10 @@ namespace dxvk {
       }
 
       writeCacheEntry(file, entry);
+      Logger::info(log::ehang("Wrote state cache entry to disk"));
     }
+
+    Logger::info(log::ehang("State cache writer thread exiting"));
   }
 
 
@@ -1032,7 +1086,7 @@ namespace dxvk {
       if (m_device->config().numCompilerThreads > 0)
         numWorkers = m_device->config().numCompilerThreads;
 
-      Logger::info(str::format("DXVK: Using ", numWorkers, " compiler threads"));
+      Logger::info(log::ehang("Using ", numWorkers, " compiler threads"));
 
       // Start the worker threads and the file writer
       m_workerBusy.store(numWorkers);
@@ -1046,8 +1100,10 @@ namespace dxvk {
 
 
   void DxvkStateCache::createWriter() {
-    if (!m_writerThread.joinable())
+    if (!m_writerThread.joinable()) {
+      Logger::info(log::ehang("Starting state cache writer thread"));
       m_writerThread = dxvk::thread([this] () { writerFunc(); });
+    }
   }
 
 

@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
 
@@ -99,10 +100,14 @@ namespace dxvk {
     /**
     * \brief Precompile all currently-available pipelines in the state cache
     */
-    void precompileAllAvailable();
-    
+    void precompileAllAvailablePipelines();
+
   private:
-    
+
+    uint64_t allocatePipelineId() {
+      return m_nextPipelineId.fetch_add(1u, std::memory_order_relaxed);
+    }
+
     DxvkDevice*               m_device;
     Rc<DxvkPipelineCache>     m_cache;
     Rc<DxvkStateCache>        m_stateCache;
@@ -110,6 +115,7 @@ namespace dxvk {
 
     std::atomic<uint32_t>     m_numComputePipelines  = { 0 };
     std::atomic<uint32_t>     m_numGraphicsPipelines = { 0 };
+    std::atomic<uint64_t>     m_nextPipelineId       = { 1 };
     
     dxvk::mutex m_mutex;
     

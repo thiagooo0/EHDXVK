@@ -100,10 +100,12 @@ namespace dxvk {
     DxvkGraphicsPipelineInstance(
       const DxvkGraphicsPipelineStateInfo&  state,
       const DxvkRenderPass*                 rp,
+            uint64_t                        pipelineId,
             VkPipeline                      pipe)
     : m_stateVector (state),
       m_renderPass  (rp),
-      m_pipeline    (pipe) { }
+      m_pipeline    (pipe),
+      m_pipelineId  (pipelineId) { }
 
     /**
      * \brief Checks for matching pipeline state
@@ -127,11 +129,24 @@ namespace dxvk {
       return m_pipeline;
     }
 
+    uint64_t pipelineId() const {
+      return m_pipelineId;
+    }
+
+    const DxvkGraphicsPipelineStateInfo& stateVector() const {
+      return m_stateVector;
+    }
+
+    const DxvkRenderPass* renderPass() const {
+      return m_renderPass;
+    }
+
   private:
 
     DxvkGraphicsPipelineStateInfo m_stateVector;
     const DxvkRenderPass*         m_renderPass;
     VkPipeline                    m_pipeline;
+    uint64_t                      m_pipelineId = 0;
 
   };
 
@@ -257,7 +272,8 @@ namespace dxvk {
     
     VkPipeline createPipeline(
       const DxvkGraphicsPipelineStateInfo& state,
-      const DxvkRenderPass*                renderPass) const;
+      const DxvkRenderPass*                renderPass,
+            uint64_t                      pipelineId) const;
     
     void destroyPipeline(
             VkPipeline                     pipeline) const;

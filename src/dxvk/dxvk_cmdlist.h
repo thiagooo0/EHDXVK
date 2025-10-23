@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdint>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 
 #include "dxvk_bind_mask.h"
 #include "dxvk_buffer.h"
@@ -10,10 +13,12 @@
 #include "dxvk_gpu_query.h"
 #include "dxvk_lifetime.h"
 #include "dxvk_limits.h"
+#include "dxvk_log_util.h"
 #include "dxvk_pipelayout.h"
 #include "dxvk_signal.h"
 #include "dxvk_staging.h"
 #include "dxvk_stats.h"
+#include "../util/util_time.h"
 
 namespace dxvk {
   
@@ -254,9 +259,29 @@ namespace dxvk {
     void updateDescriptorSets(
             uint32_t                      descriptorWriteCount,
       const VkWriteDescriptorSet*         pDescriptorWrites) {
+      const auto updateStart = dxvk::high_resolution_clock::now();
+
+      std::ostringstream summary;
+      for (uint32_t i = 0; i < descriptorWriteCount; i++) {
+        const auto& write = pDescriptorWrites[i];
+        summary << " [set=0x" << std::hex
+                << uint64_t(reinterpret_cast<uintptr_t>(write.dstSet)) << std::dec
+                << " binding=" << write.dstBinding
+                << " arrayElem=" << write.dstArrayElement
+                << " type=" << uint32_t(write.descriptorType)
+                << " count=" << write.descriptorCount << ']';
+      }
+
+      Logger::info(log::ehang("Updating ", descriptorWriteCount,
+        " descriptor writes", summary.str()));
+
       m_vkd->vkUpdateDescriptorSets(m_vkd->device(),
         descriptorWriteCount, pDescriptorWrites,
         0, nullptr);
+
+      const auto updateEnd = dxvk::high_resolution_clock::now();
+      const auto updateDuration = std::chrono::duration<double, std::milli>(updateEnd - updateStart);
+      Logger::info(log::ehang("Descriptor update completed in ", updateDuration.count(), " ms"));
     }
     
     

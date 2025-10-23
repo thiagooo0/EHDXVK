@@ -46,9 +46,11 @@ namespace dxvk {
 
     DxvkComputePipelineInstance(
       const DxvkComputePipelineStateInfo& state,
+            uint64_t                      pipelineId,
             VkPipeline                    pipe)
     : m_stateVector (state),
-      m_pipeline    (pipe) { }
+      m_pipeline    (pipe),
+      m_pipelineId  (pipelineId) { }
 
     /**
      * \brief Checks for matching pipeline state
@@ -69,10 +71,15 @@ namespace dxvk {
       return m_pipeline;
     }
 
+    uint64_t pipelineId() const {
+      return m_pipelineId;
+    }
+
   private:
 
     DxvkComputePipelineStateInfo m_stateVector;
     VkPipeline                   m_pipeline;
+    uint64_t                     m_pipelineId = 0;
 
   };
   
@@ -155,7 +162,8 @@ namespace dxvk {
       const DxvkComputePipelineStateInfo& state);
     
     VkPipeline createPipeline(
-      const DxvkComputePipelineStateInfo& state) const;
+      const DxvkComputePipelineStateInfo& state,
+            uint64_t                      pipelineId) const;
     
     void destroyPipeline(
             VkPipeline                    pipeline);

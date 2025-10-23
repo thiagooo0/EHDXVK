@@ -1,7 +1,12 @@
 #include <algorithm>
 
 #include "dxvk_device.h"
+#include "dxvk_log_util.h"
 #include "dxvk_renderpass.h"
+
+#include "../util/util_time.h"
+
+#include <sstream>
 
 namespace dxvk {
   
@@ -87,6 +92,29 @@ namespace dxvk {
 
   
   VkRenderPass DxvkRenderPass::createRenderPass(const DxvkRenderPassOps& ops) {
+    std::ostringstream summary;
+    summary << "samples=" << uint32_t(m_format.sampleCount);
+
+    for (uint32_t i = 0; i < MaxNumRenderTargets; i++) {
+      if (m_format.color[i].format != VK_FORMAT_UNDEFINED) {
+        summary << " color[" << i << "]={fmt=" << uint32_t(m_format.color[i].format)
+                << ",layout=" << uint32_t(m_format.color[i].layout)
+                << ",loadOp=" << uint32_t(ops.colorOps[i].loadOp)
+                << ",storeLayout=" << uint32_t(ops.colorOps[i].storeLayout) << "}";
+      }
+    }
+
+    if (m_format.depth.format != VK_FORMAT_UNDEFINED) {
+      summary << " depth={fmt=" << uint32_t(m_format.depth.format)
+              << ",layout=" << uint32_t(m_format.depth.layout)
+              << ",loadOpD=" << uint32_t(ops.depthOps.loadOpD)
+              << ",loadOpS=" << uint32_t(ops.depthOps.loadOpS)
+              << ",storeLayout=" << uint32_t(ops.depthOps.storeLayout) << "}";
+    }
+
+    const auto createStart = dxvk::high_resolution_clock::now();
+    Logger::info(log::ehang("Creating render pass ", summary.str()));
+
     std::vector<VkAttachmentDescription> attachments;
     
     VkAttachmentReference                                  depthRef;
@@ -236,9 +264,14 @@ namespace dxvk {
     
     if (m_vkd->vkCreateRenderPass(m_vkd->device(), &info, nullptr, &renderPass) != VK_SUCCESS) {
       Logger::err("DxvkRenderPass: Failed to create render pass object");
+      Logger::err(log::ehang("Render pass creation failed for ", summary.str()));
       return VK_NULL_HANDLE;
     }
-    
+
+    const auto createEnd = dxvk::high_resolution_clock::now();
+    const auto createDuration = std::chrono::duration<double, std::milli>(createEnd - createStart);
+    Logger::info(log::ehang("Render pass created in ", createDuration.count(), " ms"));
+
     return renderPass;
   }
   

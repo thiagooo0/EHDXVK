@@ -1,5 +1,8 @@
 #include "dxvk_device.h"
 #include "dxvk_instance.h"
+#include "dxvk_log_util.h"
+
+#include "../util/util_string.h"
 
 namespace dxvk {
   
@@ -22,13 +25,41 @@ namespace dxvk {
     auto queueFamilies = m_adapter->findQueueFamilies();
     m_queues.graphics = getQueue(queueFamilies.graphics, 0);
     m_queues.transfer = getQueue(queueFamilies.transfer, 0);
+
+    if (m_options.enableShaderCache) {
+      Logger::info(log::ehang("Shader cache enabled, attempting to load shaders"));
+      m_shaderCache = new DxvkShaderCache(m_options);
+
+      if (m_shaderCache != nullptr) {
+        bool loadedAll = m_shaderCache->loadShaders([this](const Rc<DxvkShader>& shader) {
+          m_objects.pipelineManager().registerShader(shader);
+        });
+
+        Logger::info(log::ehang("Shader cache load completed (", loadedAll ? "success" : "incomplete", ")"));
+
+        if (loadedAll) {
+          Logger::info(log::ehang("Triggering pipeline precompilation using shader cache"));
+          m_objects.pipelineManager().precompileAllAvailablePipelines();
+        }
+        else {
+          Logger::warn(log::ehang("Shader cache load reported errors"));
+        }
+      }
+    } else {
+      Logger::info(log::ehang("Shader cache disabled by configuration"));
+    }
   }
-  
-  
+
+
   DxvkDevice::~DxvkDevice() {
     // Wait for all pending Vulkan commands to be
     // executed before we destroy any resources.
     this->waitForIdle();
+
+    if (m_shaderCache != nullptr) {
+      Logger::info(log::ehang("Stopping shader cache writer thread"));
+      m_shaderCache->stopWriter();
+    }
 
     // Stop workers explicitly in order to prevent
     // access to structures that are being destroyed.
@@ -196,10 +227,6 @@ namespace dxvk {
 
   void DxvkDevice::registerShader(const Rc<DxvkShader>& shader) {
     m_objects.pipelineManager().registerShader(shader);
-    // Optional precompile: enqueue all pipelines that are currently resolvable
-    Logger::info("[DXVK] [registerShader]");
-    Logger::info("[DXVK] [registerShader] precompileAllAvailable");
-      m_objects.pipelineManager().precompileAllAvailable();
   }
   
   

@@ -4,6 +4,9 @@
 #include "d3d9_device.h"
 #include "d3d9_util.h"
 
+#include "../dxvk/dxvk_log_util.h"
+#include "../util/util_time.h"
+
 namespace dxvk {
 
   D3D9CommonShader::D3D9CommonShader() {}
@@ -21,7 +24,9 @@ namespace dxvk {
     std::memcpy(m_bytecode.data(), pShaderBytecode, bytecodeLength);
 
     const std::string name = Key.toString();
-    Logger::debug(str::format("Compiling shader ", name));
+    Logger::info(log::ehang("Compiling shader ", name));
+
+    const auto compileStart = dxvk::high_resolution_clock::now();
     
     // If requested by the user, dump both the raw DXBC
     // shader and the compiled SPIR-V module to a file.
@@ -75,6 +80,10 @@ namespace dxvk {
 
     m_shaders[0]->setShaderKey(Key);
 
+    const auto compileEnd = dxvk::high_resolution_clock::now();
+    const auto compileDuration = std::chrono::duration<double, std::milli>(compileEnd - compileStart);
+    Logger::info(log::ehang("Shader ", name, " compiled in ", compileDuration.count(), " ms"));
+
     if (m_shaders[1] != nullptr) {
       // Lets lie about the shader key type for the state cache.
       m_shaders[1]->setShaderKey({ VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, Key.sha1() });
@@ -86,6 +95,13 @@ namespace dxvk {
         std::ios_base::binary | std::ios_base::trunc);
       
       m_shaders[0]->dump(dumpStream);
+    }
+
+    if (auto cache = pDevice->GetDXVKDevice()->shaderCache(); cache != nullptr) {
+      cache->storeShader(m_shaders[0]->getShaderKey(), m_shaders[0]);
+
+      if (m_shaders[1] != nullptr)
+        cache->storeShader(m_shaders[1]->getShaderKey(), m_shaders[1]);
     }
 
     pDevice->GetDXVKDevice()->registerShader(m_shaders[0]);
