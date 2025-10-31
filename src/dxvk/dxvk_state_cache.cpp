@@ -2,6 +2,12 @@
 #include "dxvk_pipemanager.h"
 #include "dxvk_state_cache.h"
 
+#include "../util/log/log.h"
+#include "../util/util_string.h"
+
+#include <unordered_map>
+#include <unordered_set>
+
 namespace dxvk {
 
   static const Sha1Hash       g_nullHash      = Sha1Hash::compute(nullptr, 0);
@@ -289,7 +295,18 @@ namespace dxvk {
 
   void DxvkStateCache::addPipelineLibrary(
     const DxvkStateCacheKey&              shaders) {
-    if (!m_enable || shaders.vs.eq(g_nullShaderKey))
+    if (!m_enable)
+      return;
+
+    bool hasAnyStage = false;
+
+    hasAnyStage |= !shaders.vs .eq(g_nullShaderKey);
+    hasAnyStage |= !shaders.tcs.eq(g_nullShaderKey);
+    hasAnyStage |= !shaders.tes.eq(g_nullShaderKey);
+    hasAnyStage |= !shaders.gs .eq(g_nullShaderKey);
+    hasAnyStage |= !shaders.fs .eq(g_nullShaderKey);
+
+    if (!hasAnyStage)
       return;
 
     // Do not add an entry that is already in the cache
@@ -380,6 +397,131 @@ namespace dxvk {
   }
 
 
+  void DxvkStateCache::registerCachedShader(const Rc<DxvkShader>& shader) {
+    if (!m_enable)
+      return;
+
+    DxvkShaderKey key = shader->getShaderKey();
+
+    if (key.eq(g_nullShaderKey))
+      return;
+
+    std::lock_guard<dxvk::mutex> entryLock(m_entryLock);
+    m_shaderMap.insert({ key, shader });
+  }
+
+
+  void DxvkStateCache::prewarmAllPipelines() {
+    if (!m_enable)
+      return;
+
+    auto formatShaderSet = [] (const DxvkStateCacheKey& key) {
+      std::string result;
+
+      auto append = [&result] (const char* name, const DxvkShaderKey& shader) {
+        if (shader.eq(g_nullShaderKey))
+          return;
+
+        if (!result.empty())
+          result += ", ";
+
+        result += name;
+        result += '=';
+        result += shader.toString();
+      };
+
+      append("VS",  key.vs);
+      append("TCS", key.tcs);
+      append("TES", key.tes);
+      append("GS",  key.gs);
+      append("FS",  key.fs);
+
+      if (result.empty())
+        result = "<no stages>";
+
+      return result;
+    };
+
+    std::unordered_map<DxvkStateCacheKey, WorkerItem, DxvkHash, DxvkEq> workItems;
+    workItems.reserve(m_entries.size());
+
+    size_t skippedSets = 0;
+
+    for (const auto& entry : m_entries) {
+      const DxvkStateCacheKey& key = entry.shaders;
+
+      if (workItems.find(key) != workItems.end())
+        continue;
+
+      WorkerItem item;
+      bool missingStage = false;
+
+      auto ensureShader = [&] (const DxvkShaderKey& shaderKey,
+        Rc<DxvkShader>& shaderObject, const char* stageName) {
+        if (shaderKey.eq(g_nullShaderKey))
+          return;
+
+        if (!getShaderByKey(shaderKey, shaderObject)) {
+          Logger::ehang(str::format(
+            "Skipping cached shader set ", formatShaderSet(key),
+            " because stage ", stageName,
+            " with key ", shaderKey.toString(),
+            " is unavailable"));
+          missingStage = true;
+        }
+      };
+
+      ensureShader(key.vs,  item.gp.vs,  "VS");
+      ensureShader(key.tcs, item.gp.tcs, "TCS");
+      ensureShader(key.tes, item.gp.tes, "TES");
+      ensureShader(key.gs,  item.gp.gs,  "GS");
+      ensureShader(key.fs,  item.gp.fs,  "FS");
+
+      if (missingStage) {
+        skippedSets += 1;
+        continue;
+      }
+
+      workItems.emplace(key, std::move(item));
+    }
+
+    if (workItems.empty()) {
+      Logger::ehang("No complete shader sets available in state cache for prewarm");
+      return;
+    }
+
+    size_t pipelineLibraryCount = 0;
+    size_t monolithicPipelineCount = 0;
+
+    for (const auto& entry : workItems) {
+      auto range = m_entryMap.equal_range(entry.first);
+
+      for (auto it = range.first; it != range.second; ++it) {
+        const auto& cacheEntry = m_entries[it->second];
+
+        if (cacheEntry.type == DxvkStateCacheEntryType::PipelineLibrary)
+          pipelineLibraryCount += 1;
+        else if (cacheEntry.type == DxvkStateCacheEntryType::MonolithicPipeline)
+          monolithicPipelineCount += 1;
+      }
+    }
+
+    Logger::ehang(str::format(
+      "Prewarming ", workItems.size(),
+      " shader sets from state cache (",
+      pipelineLibraryCount, " pipeline libraries, ",
+      monolithicPipelineCount, " monolithic pipelines)"));
+
+    if (skippedSets)
+      Logger::ehang(str::format(
+        "Skipped ", skippedSets,
+        " shader sets because required stages were missing from cache"));
+
+    for (const auto& item : workItems)
+      compilePipelines(item.second);
+  }
+
+
   void DxvkStateCache::stopWorkers() {
     { std::lock_guard<dxvk::mutex> workerLock(m_workerLock);
       std::lock_guard<dxvk::mutex> writerLock(m_writerLock);
@@ -448,27 +590,105 @@ namespace dxvk {
     for (auto e = entries.first; e != entries.second; e++) {
       const auto& entry = m_entries[e->second];
 
+      auto describeShaders = [&entry] () {
+        std::string description;
+
+        auto append = [&] (const char* name, const DxvkShaderKey& shader) {
+          if (shader.eq(g_nullShaderKey))
+            return;
+
+          if (!description.empty())
+            description += ", ";
+
+          description += name;
+          description += '=';
+          description += shader.toString();
+        };
+
+        append("VS",  entry.shaders.vs);
+        append("TCS", entry.shaders.tcs);
+        append("TES", entry.shaders.tes);
+        append("GS",  entry.shaders.gs);
+        append("FS",  entry.shaders.fs);
+
+        if (description.empty())
+          description = "<no stages>";
+
+        return description;
+      };
+
       switch (entry.type) {
         case DxvkStateCacheEntryType::MonolithicPipeline: {
           if (!pipeline)
             pipeline = m_pipeManager->createGraphicsPipeline(item.gp);
 
-          m_pipeWorkers->compileGraphicsPipeline(pipeline, entry.gpState, DxvkPipelinePriority::Normal);
+          if (!pipeline) {
+            Logger::ehang(str::format(
+              "Failed to acquire graphics pipeline for cached state ",
+              describeShaders()));
+            continue;
+          }
+
+          if (m_device->canUseGraphicsPipelineLibrary()) {
+            if (item.gp.vs != nullptr) {
+              DxvkGraphicsPipelineVertexInputState viState(m_device, entry.gpState, item.gp.vs.ptr());
+              m_pipeManager->createVertexInputLibrary(viState);
+            }
+
+            if (item.gp.fs != nullptr) {
+              DxvkGraphicsPipelineFragmentOutputState foState(m_device, entry.gpState, item.gp.fs.ptr());
+              m_pipeManager->createFragmentOutputLibrary(foState);
+            }
+
+            auto handleInfo = pipeline->getPipelineHandle(entry.gpState);
+
+            if (!handleInfo.first) {
+              Logger::ehang(str::format(
+                "Failed to prewarm graphics pipeline for shader set ",
+                describeShaders()));
+            } else {
+              Logger::ehang(str::format(
+                "Prewarmed cached graphics pipeline for shader set ",
+                describeShaders(),
+                " via getPipelineHandle"));
+            }
+          } else {
+            pipeline->compilePipeline(entry.gpState);
+            Logger::ehang(str::format(
+              "Prewarmed cached graphics pipeline for shader set ",
+              describeShaders(),
+              " via compilePipeline"));
+          }
         } break;
 
         case DxvkStateCacheEntryType::PipelineLibrary: {
-          if (!m_device->canUseGraphicsPipelineLibrary() || item.gp.vs == nullptr)
+          if (!m_device->canUseGraphicsPipelineLibrary())
             break;
 
           DxvkShaderPipelineLibraryKey libraryKey;
-          libraryKey.addShader(item.gp.vs);
 
-          if (item.gp.tcs != nullptr) libraryKey.addShader(item.gp.tcs);
-          if (item.gp.tes != nullptr) libraryKey.addShader(item.gp.tes);
-          if (item.gp.gs  != nullptr) libraryKey.addShader(item.gp.gs);
+          auto tryAddShader = [&] (const DxvkShaderKey& shaderKey, const Rc<DxvkShader>& shaderObject) {
+            if (!shaderKey.eq(g_nullShaderKey) && shaderObject != nullptr)
+              libraryKey.addShader(shaderObject);
+          };
+
+          tryAddShader(entry.shaders.vs,  item.gp.vs);
+          tryAddShader(entry.shaders.tcs, item.gp.tcs);
+          tryAddShader(entry.shaders.tes, item.gp.tes);
+          tryAddShader(entry.shaders.gs,  item.gp.gs);
+          tryAddShader(entry.shaders.fs,  item.gp.fs);
+
+          if (!libraryKey.canUsePipelineLibrary())
+            break;
 
           auto pipelineLibrary = m_pipeManager->createShaderPipelineLibrary(libraryKey);
-          m_pipeWorkers->compilePipelineLibrary(pipelineLibrary, DxvkPipelinePriority::Normal);
+
+          if (pipelineLibrary) {
+            pipelineLibrary->compilePipeline();
+            Logger::ehang(str::format(
+              "Prewarmed cached shader pipeline library for shader set ",
+              describeShaders()));
+          }
         } break;
       }
     }

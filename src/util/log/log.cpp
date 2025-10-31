@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cctype>
 #include <utility>
 
 #include "log.h"
@@ -7,7 +9,9 @@
 namespace dxvk {
   
   Logger::Logger(const std::string& fileName)
-  : m_minLevel(getMinLogLevel()), m_fileName(fileName) {
+  : m_minLevel(getMinLogLevel()),
+    m_fileName(fileName),
+    m_enableEhangLog(getEhangLogEnabled()) {
 
   }
   
@@ -43,7 +47,15 @@ namespace dxvk {
   void Logger::log(LogLevel level, const std::string& message) {
     s_instance.emitMsg(level, message);
   }
-  
+
+
+  void Logger::ehang(const std::string& message) {
+    if (!s_instance.m_enableEhangLog)
+      return;
+
+    s_instance.emitMsg(LogLevel::Info, std::string("【ehang】") + message);
+  }
+
   
   void Logger::emitMsg(LogLevel level, const std::string& message) {
     if (level >= m_minLevel) {
@@ -128,5 +140,19 @@ namespace dxvk {
     
     return LogLevel::Info;
   }
-  
+
+
+  bool Logger::getEhangLogEnabled() {
+    std::string value = env::getEnvVar("DXVK_EHANG_LOG");
+
+    std::transform(value.begin(), value.end(), value.begin(), [] (unsigned char c) {
+      return char(std::tolower(c));
+    });
+
+    return value == "1"
+        || value == "true"
+        || value == "yes"
+        || value == "on";
+  }
+
 }

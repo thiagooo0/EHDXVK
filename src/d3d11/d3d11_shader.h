@@ -37,6 +37,9 @@ namespace dxvk {
       const DxbcModuleInfo* pDxbcModuleInfo,
       const void*           pShaderBytecode,
             size_t          BytecodeLength);
+    D3D11CommonShader(
+            D3D11Device*    pDevice,
+      const Rc<DxvkShader>&  shader);
     ~D3D11CommonShader();
 
     Rc<DxvkShader> GetShader() const {
@@ -54,10 +57,12 @@ namespace dxvk {
     }
     
   private:
-    
+
     Rc<DxvkShader> m_shader;
     Rc<DxvkBuffer> m_buffer;
-    
+
+    void initConstantBuffer(D3D11Device* pDevice);
+
   };
 
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include "dxvk_adapter.h"
 #include "dxvk_buffer.h"
 #include "dxvk_compute.h"
@@ -21,6 +23,7 @@
 #include "dxvk_renderpass.h"
 #include "dxvk_sampler.h"
 #include "dxvk_shader.h"
+#include "dxvk_shader_cache.h"
 #include "dxvk_sparse.h"
 #include "dxvk_stats.h"
 #include "dxvk_unbound.h"
@@ -439,7 +442,31 @@ namespace dxvk {
      */
     void registerShader(
       const Rc<DxvkShader>&         shader);
-    
+
+    /**
+     * \brief Registers a cached shader
+     * \param [in] shader Shader restored from cache
+     */
+    DxvkShaderPipelineLibrary* registerShaderFromCache(
+      const Rc<DxvkShader>&         shader);
+
+    /**
+     * \brief Prewarms cached pipeline libraries and monolithic pipelines
+     */
+    void prewarmCachedPipelines();
+
+    /**
+     * \brief Prewarms a shader via graphics pipeline compilation
+     * \param [in] shader Shader to prewarm
+     */
+    void prewarmShaderWithGraphics(
+      const Rc<DxvkShader>&         shader,
+            DxvkShaderPipelineLibrary* library);
+
+    DxvkShaderCache* getShaderCache() const {
+      return m_shaderCache.get();
+    }
+
     /**
      * \brief Prioritizes compilation of a given shader
      * \param [in] shader Shader to start compiling
@@ -548,6 +575,7 @@ namespace dxvk {
     
     DxvkDevicePerfHints         m_perfHints;
     DxvkObjects                 m_objects;
+    std::unique_ptr<DxvkShaderCache> m_shaderCache;
 
     sync::Spinlock              m_statLock;
     DxvkStatCounters            m_statCounters;

@@ -235,6 +235,13 @@ namespace dxvk {
       const Rc<DxvkShader>&         shader);
 
     /**
+     * \brief Registers a cached shader without immediate compilation
+     * \returns Pipeline library created for the shader, if any
+     */
+    DxvkShaderPipelineLibrary* registerShaderFromCache(
+      const Rc<DxvkShader>&         shader);
+
+    /**
      * \brief Prioritizes compilation of a given shader
      *
      * Adds the pipeline library for the given shader
@@ -263,7 +270,12 @@ namespace dxvk {
      * \brief Stops async compiler threads
      */
     void stopWorkerThreads();
-    
+
+    /**
+     * \brief Prewarms pipeline libraries and monolithic pipelines from the cache
+     */
+    void prewarmCachedPipelines();
+
   private:
     
     DxvkDevice*               m_device;

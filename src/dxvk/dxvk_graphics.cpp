@@ -1007,8 +1007,7 @@ namespace dxvk {
 
         // Only store pipelines in the state cache that cannot benefit
         // from pipeline libraries, or if that feature is disabled.
-        if (!canCreateBasePipeline)
-          this->writePipelineStateToCache(state);
+        this->writePipelineStateToCache(state);
       }
     }
 

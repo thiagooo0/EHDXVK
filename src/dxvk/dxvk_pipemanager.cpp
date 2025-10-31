@@ -220,12 +220,45 @@ namespace dxvk {
     const DxvkGraphicsPipelineShaders& shaders) {
     if (shaders.vs == nullptr)
       return nullptr;
-    
+
     std::lock_guard<dxvk::mutex> lock(m_mutex);
-    
+
+    auto describeShaders = [&shaders] () {
+      std::string result;
+
+      auto append = [&result] (const char* name, const Rc<DxvkShader>& shader) {
+        if (shader == nullptr)
+          return;
+
+        if (!result.empty())
+          result += ", ";
+
+        result += name;
+        result += '=';
+        result += shader->debugName();
+      };
+
+      append("VS",  shaders.vs);
+      append("TCS", shaders.tcs);
+      append("TES", shaders.tes);
+      append("GS",  shaders.gs);
+      append("FS",  shaders.fs);
+
+      if (result.empty())
+        result = "<no stages>";
+
+      return result;
+    };
+
     auto pair = m_graphicsPipelines.find(shaders);
-    if (pair != m_graphicsPipelines.end())
+    if (pair != m_graphicsPipelines.end()) {
+      Logger::ehang(str::format(
+        "Reusing cached graphics pipeline for shader set ", describeShaders()));
       return &pair->second;
+    }
+
+    Logger::ehang(str::format(
+      "Creating graphics pipeline for shader set ", describeShaders()));
 
     DxvkBindingLayout mergedLayout(VK_SHADER_STAGE_ALL_GRAPHICS);
     mergedLayout.merge(shaders.vs->getBindings());
@@ -278,13 +311,21 @@ namespace dxvk {
         }
       }
 
-      if (vsLibrary) {
+      if (shaders.fs != nullptr) {
         DxvkShaderPipelineLibraryKey fsKey;
+        fsKey.addShader(shaders.fs);
 
-        if (shaders.fs != nullptr)
-          fsKey.addShader(shaders.fs);
+        if (fsKey.canUsePipelineLibrary()) {
+          fsLibrary = findPipelineLibraryLocked(fsKey);
 
-        fsLibrary = findPipelineLibraryLocked(fsKey);
+          if (!fsLibrary) {
+            fsLibrary = createPipelineLibraryLocked(fsKey);
+
+            DxvkStateCacheKey shaderKeys;
+            shaderKeys.fs = shaders.fs->getShaderKey();
+            m_stateCache.addPipelineLibrary(shaderKeys);
+          }
+        }
       }
     }
 
@@ -338,7 +379,7 @@ namespace dxvk {
   
   void DxvkPipelineManager::registerShader(
     const Rc<DxvkShader>&         shader) {
-    if (canPrecompileShader(shader)) {
+    if (canPrecompileShader(shader) && shader->needsLibraryCompile()) {
       DxvkShaderPipelineLibraryKey key;
       key.addShader(shader);
 
@@ -347,6 +388,27 @@ namespace dxvk {
     }
 
     m_stateCache.registerShader(shader);
+  }
+
+
+  DxvkShaderPipelineLibrary* DxvkPipelineManager::registerShaderFromCache(
+    const Rc<DxvkShader>&         shader) {
+    DxvkShaderPipelineLibrary* library = nullptr;
+
+    if (canPrecompileShader(shader)) {
+      DxvkShaderPipelineLibraryKey key;
+      key.addShader(shader);
+
+      std::lock_guard<dxvk::mutex> lock(m_mutex);
+
+      library = findPipelineLibraryLocked(key);
+
+      if (!library)
+        library = createPipelineLibraryLocked(key);
+    }
+
+    m_stateCache.registerCachedShader(shader);
+    return library;
   }
 
 
@@ -376,6 +438,11 @@ namespace dxvk {
     result.numGraphicsLibraries = m_stats.numGraphicsLibraries.load();
     result.numComputePipelines  = m_stats.numComputePipelines.load();
     return result;
+  }
+
+
+  void DxvkPipelineManager::prewarmCachedPipelines() {
+    m_stateCache.prewarmAllPipelines();
   }
 
 

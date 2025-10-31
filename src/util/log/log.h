@@ -39,6 +39,7 @@ namespace dxvk {
     static void warn (const std::string& message);
     static void err  (const std::string& message);
     static void log  (LogLevel level, const std::string& message);
+    static void ehang(const std::string& message);
     
     static LogLevel logLevel() {
       return s_instance.m_minLevel;
@@ -47,9 +48,10 @@ namespace dxvk {
   private:
     
     static Logger     s_instance;
-    
+
     const LogLevel    m_minLevel;
     const std::string m_fileName;
+    const bool        m_enableEhangLog;
     
     dxvk::mutex       m_mutex;
     std::ofstream     m_fileStream;
@@ -58,12 +60,13 @@ namespace dxvk {
     PFN_wineLogOutput m_wineLogOutput = nullptr;
 
     void emitMsg(LogLevel level, const std::string& message);
-    
+
     std::string getFileName(
       const std::string& base);
 
     static LogLevel getMinLogLevel();
+    static bool getEhangLogEnabled();
 
   };
-  
+
 }

@@ -5,8 +5,42 @@ namespace dxvk {
   
   D3D11CommonShader:: D3D11CommonShader() { }
   D3D11CommonShader::~D3D11CommonShader() { }
-  
-  
+
+
+  void D3D11CommonShader::initConstantBuffer(D3D11Device* pDevice) {
+    if (m_shader == nullptr)
+      return;
+
+    const DxvkShaderCreateInfo& shaderInfo = m_shader->info();
+
+    if (!shaderInfo.uniformSize) {
+      m_buffer = nullptr;
+      return;
+    }
+
+    DxvkBufferCreateInfo info;
+    info.size   = shaderInfo.uniformSize;
+    info.usage  = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    info.stages = util::pipelineStages(shaderInfo.stage);
+    info.access = VK_ACCESS_UNIFORM_READ_BIT;
+
+    VkMemoryPropertyFlags memFlags
+      = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+      | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+      | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+    m_buffer = pDevice->GetDXVKDevice()->createBuffer(info, memFlags);
+
+    if (m_buffer != nullptr) {
+      std::memcpy(m_buffer->mapPtr(0), shaderInfo.uniformData, shaderInfo.uniformSize);
+
+      Logger::ehang(str::format(
+        "Initialized uniform buffer for shader ",
+        m_shader->debugName(), " size=", shaderInfo.uniformSize));
+    }
+  }
+
+
   D3D11CommonShader::D3D11CommonShader(
           D3D11Device*    pDevice,
     const DxvkShaderKey*  pShaderKey,
@@ -59,25 +93,24 @@ namespace dxvk {
     }
     
     // Create shader constant buffer if necessary
-    const DxvkShaderCreateInfo& shaderInfo = m_shader->info();
-
-    if (shaderInfo.uniformSize) {
-      DxvkBufferCreateInfo info;
-      info.size   = shaderInfo.uniformSize;
-      info.usage  = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-      info.stages = util::pipelineStages(shaderInfo.stage);
-      info.access = VK_ACCESS_UNIFORM_READ_BIT;
-      
-      VkMemoryPropertyFlags memFlags
-        = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-        | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-        | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-      
-      m_buffer = pDevice->GetDXVKDevice()->createBuffer(info, memFlags);
-      std::memcpy(m_buffer->mapPtr(0), shaderInfo.uniformData, shaderInfo.uniformSize);
-    }
+    initConstantBuffer(pDevice);
 
     pDevice->GetDXVKDevice()->registerShader(m_shader);
+  }
+
+
+  D3D11CommonShader::D3D11CommonShader(
+          D3D11Device*    pDevice,
+    const Rc<DxvkShader>&  shader)
+  : m_shader(shader) {
+    if (m_shader == nullptr)
+      throw DxvkError("D3D11CommonShader: Invalid cached shader reference");
+
+    Logger::ehang(str::format(
+      "Using cached shader ", m_shader->debugName(),
+      " for stage ", uint32_t(m_shader->info().stage)));
+
+    initConstantBuffer(pDevice);
   }
 
   
@@ -102,18 +135,43 @@ namespace dxvk {
       }
     }
     
-    // This shader has not been compiled yet, so we have to create a
-    // new module. This takes a while, so we won't lock the structure.
     D3D11CommonShader module;
-    
-    try {
-      module = D3D11CommonShader(pDevice, pShaderKey,
-        pDxbcModuleInfo, pShaderBytecode, BytecodeLength);
-    } catch (const DxvkError& e) {
-      Logger::err(e.message());
-      return E_INVALIDARG;
+
+    Rc<DxvkShader> cachedShader;
+    DxvkShaderCache* shaderCache = pDevice->GetDXVKDevice()->getShaderCache();
+
+    if (shaderCache != nullptr)
+      cachedShader = shaderCache->findShader(*pShaderKey);
+
+    if (cachedShader != nullptr
+     && cachedShader->info().stage == pShaderKey->type()) {
+      Logger::ehang(str::format(
+        "Found cached shader for key ", pShaderKey->toString(),
+        ", skipping DXBC compilation"));
+
+      module = D3D11CommonShader(pDevice, cachedShader);
+    } else {
+      if (cachedShader != nullptr) {
+        Logger::ehang(str::format(
+          "Cached shader stage mismatch for key ", pShaderKey->toString(),
+          ", expected stage ", uint32_t(pShaderKey->type()),
+          ", got ", uint32_t(cachedShader->info().stage),
+          "; recompiling"));
+      } else {
+        Logger::ehang(str::format(
+          "Shader cache miss for key ", pShaderKey->toString(),
+          ", compiling from DXBC"));
+      }
+
+      try {
+        module = D3D11CommonShader(pDevice, pShaderKey,
+          pDxbcModuleInfo, pShaderBytecode, BytecodeLength);
+      } catch (const DxvkError& e) {
+        Logger::err(e.message());
+        return E_INVALIDARG;
+      }
     }
-    
+
     // Insert the new module into the lookup table. If another thread
     // has compiled the same shader in the meantime, we should return
     // that object instead and discard the newly created module.

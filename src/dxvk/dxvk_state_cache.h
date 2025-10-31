@@ -70,9 +70,20 @@ namespace dxvk {
       const Rc<DxvkShader>&                 shader);
 
     /**
+     * \brief Registers a cached shader for later prewarming
+     */
+    void registerCachedShader(
+      const Rc<DxvkShader>&                 shader);
+
+    /**
      * \brief Explicitly stops worker threads
      */
     void stopWorkers();
+
+    /**
+     * \brief Prewarms pipelines for all cached shader sets
+     */
+    void prewarmAllPipelines();
 
   private:
 

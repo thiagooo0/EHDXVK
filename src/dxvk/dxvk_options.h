@@ -14,6 +14,9 @@ namespace dxvk {
     /// Enable state cache
     bool enableStateCache;
 
+    /// Enable shader cache
+    bool enableShaderCache;
+
     /// Number of compiler threads
     /// when using the state cache
     int32_t numCompilerThreads;
