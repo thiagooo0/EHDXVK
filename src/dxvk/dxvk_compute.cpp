@@ -11,7 +11,31 @@
 #include "dxvk_state_cache.h"
 
 namespace dxvk {
-  
+
+  namespace {
+
+    std::string describeSpecConstantState(uint32_t mask, const DxvkScInfo& scInfo) {
+      std::ostringstream stream;
+      stream << "mask=0x" << std::hex << mask << std::dec;
+
+      bool hasValues = false;
+
+      for (auto constantId : bit::BitMask(mask & ((1u << MaxNumSpecConstants) - 1u))) {
+        uint32_t value = scInfo.specConstants[constantId];
+
+        stream << (hasValues ? ", " : " values=[");
+        stream << constantId << "=0x" << std::hex << value << std::dec;
+        hasValues = true;
+      }
+
+      if (hasValues)
+        stream << ']';
+
+      return stream.str();
+    }
+
+  }
+
   DxvkComputePipeline::DxvkComputePipeline(
           DxvkDevice*                 device,
           DxvkPipelineManager*        pipeMgr,
@@ -48,8 +72,18 @@ namespace dxvk {
       // Retrieve actual pipeline handle on first use. This
       // may wait for an ongoing compile job to finish, or
       // compile the pipeline immediately on the calling thread.
-      m_libraryHandle = m_library->acquirePipelineHandle(
+      VkPipeline handle = m_library->acquirePipelineHandle(
         DxvkShaderPipelineLibraryCompileArgs());
+
+      if (handle != VK_NULL_HANDLE) {
+        m_libraryHandle = handle;
+        this->writePipelineStateToCache(state);
+      } else {
+        Logger::ehang(str::format(
+          "Failed to acquire compute pipeline library handle for shader ",
+          m_shaders.cs->getShaderKey().toString(), " with ",
+          describeSpecConstantState(this->getSpecConstantMask(), state.sc)));
+      }
 
       return m_libraryHandle;
     } else {
@@ -64,7 +98,7 @@ namespace dxvk {
           instance = this->createInstance(state);
       }
 
-      return instance->handle;
+      return instance ? instance->handle : VK_NULL_HANDLE;
     }
   }
 
@@ -74,18 +108,33 @@ namespace dxvk {
     if (!m_library) {
       std::lock_guard<dxvk::mutex> lock(m_mutex);
 
-      if (!this->findInstance(state))
-        this->createInstance(state);
+      auto instance = this->findInstance(state);
+
+      if (!instance)
+        instance = this->createInstance(state);
+
+      if (!instance)
+        return;
     }
   }
-  
-  
+
+
   DxvkComputePipelineInstance* DxvkComputePipeline::createInstance(
     const DxvkComputePipelineStateInfo& state) {
     VkPipeline newPipelineHandle = this->createPipeline(state);
 
+    if (newPipelineHandle == VK_NULL_HANDLE)
+      return nullptr;
+
+    Logger::ehang(str::format(
+      "Created monolithic compute pipeline instance for shader ",
+      m_shaders.cs->getShaderKey().toString(), " with ",
+      describeSpecConstantState(this->getSpecConstantMask(), state.sc)));
+
     m_stats->numComputePipelines += 1;
-    return &(*m_pipelines.emplace(state, newPipelineHandle));
+    auto& instance = *m_pipelines.emplace(state, newPipelineHandle);
+    this->writePipelineStateToCache(state);
+    return &instance;
   }
 
   
@@ -157,6 +206,25 @@ namespace dxvk {
     }
 
     Logger::log(level, sstr.str());
+  }
+
+
+  void DxvkComputePipeline::writePipelineStateToCache(
+    const DxvkComputePipelineStateInfo& state) const {
+    if (!m_stateCache || m_shaders.cs == nullptr)
+      return;
+
+    uint32_t specConstantMask = this->getSpecConstantMask();
+
+    m_stateCache->addComputePipeline(
+      m_shaders.cs->getShaderKey(),
+      specConstantMask,
+      state);
+
+    Logger::ehang(str::format(
+      "Recorded compute pipeline variant for shader ",
+      m_shaders.cs->getShaderKey().toString(), " with ",
+      describeSpecConstantState(specConstantMask, state.sc)));
   }
 
 }

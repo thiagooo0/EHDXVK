@@ -195,7 +195,7 @@ namespace dxvk {
     const DxvkComputePipelineShaders& shaders) {
     if (shaders.cs == nullptr)
       return nullptr;
-    
+
     std::lock_guard<dxvk::mutex> lock(m_mutex);
     
     auto pair = m_computePipelines.find(shaders);
@@ -212,9 +212,31 @@ namespace dxvk {
       std::piecewise_construct,
       std::tuple(shaders),
       std::tuple(m_device, this, shaders, layout, library));
+
+    Logger::ehang(str::format(
+      "Created compute pipeline tracking entry for shader ",
+      shaders.cs->getShaderKey().toString(),
+      library != nullptr
+        ? " backed by pipeline library"
+        : " without pipeline library backing"));
+
     return &iter.first->second;
   }
-  
+
+
+  void DxvkPipelineManager::notifyComputeLibraryCompiled(
+    const Rc<DxvkShader>& shader) {
+    if (shader == nullptr)
+      return;
+
+    DxvkComputePipelineStateInfo state;
+
+    m_stateCache.addComputePipeline(
+      shader->getShaderKey(),
+      shader->getSpecConstantMask(),
+      state);
+  }
+
   
   DxvkGraphicsPipeline* DxvkPipelineManager::createGraphicsPipeline(
     const DxvkGraphicsPipelineShaders& shaders) {

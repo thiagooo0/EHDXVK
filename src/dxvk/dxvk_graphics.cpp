@@ -1486,7 +1486,7 @@ namespace dxvk {
   
   void DxvkGraphicsPipeline::writePipelineStateToCache(
     const DxvkGraphicsPipelineStateInfo& state) const {
-    DxvkStateCacheKey key;
+    DxvkStateCacheKey key = { };
     if (m_shaders.vs  != nullptr) key.vs = m_shaders.vs->getShaderKey();
     if (m_shaders.tcs != nullptr) key.tcs = m_shaders.tcs->getShaderKey();
     if (m_shaders.tes != nullptr) key.tes = m_shaders.tes->getShaderKey();

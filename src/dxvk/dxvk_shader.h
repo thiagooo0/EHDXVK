@@ -548,6 +548,7 @@ namespace dxvk {
   private:
 
     const DxvkDevice*               m_device;
+          DxvkPipelineManager*      m_manager;
           DxvkPipelineStats*        m_stats;
           DxvkShaderSet             m_shaders;
     const DxvkBindingLayoutObjects* m_layout;
@@ -557,6 +558,7 @@ namespace dxvk {
     VkPipeline      m_pipelineNoDepthClip  = VK_NULL_HANDLE;
     uint32_t        m_useCount             = 0u;
     bool            m_compiledOnce         = false;
+    bool            m_reportedComputeReuse = false;
 
     dxvk::mutex                 m_identifierMutex;
     DxvkShaderIdentifierSet     m_identifiers;

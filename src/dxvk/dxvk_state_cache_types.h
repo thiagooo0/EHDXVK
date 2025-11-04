@@ -19,6 +19,7 @@ namespace dxvk {
     DxvkShaderKey tes;
     DxvkShaderKey gs;
     DxvkShaderKey fs;
+    DxvkShaderKey cs;
 
     bool eq(const DxvkStateCacheKey& key) const;
 
@@ -32,6 +33,7 @@ namespace dxvk {
   enum class DxvkStateCacheEntryType : uint32_t {
     MonolithicPipeline  = 0,
     PipelineLibrary     = 1,
+    ComputePipeline     = 2,
   };
 
   
@@ -47,6 +49,8 @@ namespace dxvk {
     DxvkStateCacheEntryType       type;
     DxvkStateCacheKey             shaders;
     DxvkGraphicsPipelineStateInfo gpState;
+    DxvkComputePipelineStateInfo  cpState;
+    uint32_t                      cpSpecConstantMask;
     Sha1Hash                      hash;
   };
 
@@ -60,7 +64,7 @@ namespace dxvk {
    */
   struct DxvkStateCacheHeader {
     char     magic[4]   = { 'D', 'X', 'V', 'K' };
-    uint32_t version    = 17;
+    uint32_t version    = 19;
     uint32_t entrySize  = 0; /* no longer meaningful */
   };
 

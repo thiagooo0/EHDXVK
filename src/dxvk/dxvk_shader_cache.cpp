@@ -17,7 +17,7 @@ namespace dxvk {
   namespace {
 
     constexpr uint32_t DxvkShaderCacheMagic        = 0x43535844; /* DXSC */
-    constexpr uint32_t DxvkShaderCacheVersion      = 2;
+    constexpr uint32_t DxvkShaderCacheVersion      = 3;
     constexpr uint32_t DxvkShaderCacheEntryMagic   = 0x45484353; /* SCHE */
 
     bool isCacheableStage(VkShaderStageFlagBits stage) {
@@ -27,6 +27,7 @@ namespace dxvk {
         case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
         case VK_SHADER_STAGE_GEOMETRY_BIT:
         case VK_SHADER_STAGE_FRAGMENT_BIT:
+        case VK_SHADER_STAGE_COMPUTE_BIT:
           return true;
         default:
           return false;
@@ -40,6 +41,7 @@ namespace dxvk {
         case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
         case VK_SHADER_STAGE_GEOMETRY_BIT:
         case VK_SHADER_STAGE_FRAGMENT_BIT:
+        case VK_SHADER_STAGE_COMPUTE_BIT:
           return true;
         default:
           return false;
@@ -701,9 +703,33 @@ namespace dxvk {
 
 
   void DxvkShaderCache::registerCachedShader(const Rc<DxvkShader>& shader) {
-    Logger::ehang(str::format("Registering cached shader ", shader->debugName()));
+    auto stage = shader->info().stage;
+    Logger::ehang(str::format(
+      "Registering cached shader ", shader->debugName(),
+      " stage=", uint32_t(stage)));
+
     DxvkShaderPipelineLibrary* library = m_device->registerShaderFromCache(shader);
-    m_device->prewarmShaderWithGraphics(shader, library);
+
+    switch (stage) {
+      case VK_SHADER_STAGE_VERTEX_BIT:
+      case VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
+      case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
+      case VK_SHADER_STAGE_GEOMETRY_BIT:
+      case VK_SHADER_STAGE_FRAGMENT_BIT:
+        m_device->prewarmShaderWithGraphics(shader, library);
+        break;
+
+      case VK_SHADER_STAGE_COMPUTE_BIT:
+        m_device->prewarmShaderWithCompute(shader, library);
+        break;
+
+      default:
+        Logger::ehang(str::format(
+          "Skipping cached shader ", shader->debugName(),
+          " because stage ", uint32_t(stage),
+          " is not supported for prewarm"));
+        break;
+    }
   }
 
 

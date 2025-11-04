@@ -59,6 +59,19 @@ namespace dxvk {
       const DxvkGraphicsPipelineStateInfo&  state);
 
     /**
+     * \brief Adds a compute pipeline to the cache
+     *
+     * Records the compute pipeline state for future
+     * sessions and prewarming.
+     * \param [in] shader Compute shader key
+     * \param [in] state  Compute pipeline state
+     */
+    void addComputePipeline(
+      const DxvkShaderKey&                  shader,
+      uint32_t                              specConstantMask,
+      const DxvkComputePipelineStateInfo&   state);
+
+    /**
      * \brief Registers a newly compiled shader
      * 
      * Makes the shader available to the pipeline
@@ -142,6 +155,10 @@ namespace dxvk {
 
     void compilePipelines(
       const WorkerItem&               item);
+
+    void compileComputePipelines(
+      const Rc<DxvkShader>&           shader,
+      const DxvkStateCacheKey&        key);
 
     bool readCacheFile();
 

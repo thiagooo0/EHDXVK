@@ -182,6 +182,9 @@ namespace dxvk {
      */
     DxvkComputePipeline* createComputePipeline(
       const DxvkComputePipelineShaders& shaders);
+
+    void notifyComputeLibraryCompiled(
+      const Rc<DxvkShader>&         shader);
     
     /**
      * \brief Retrieves a graphics pipeline object

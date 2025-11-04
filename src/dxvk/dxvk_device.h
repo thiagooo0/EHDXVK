@@ -463,6 +463,14 @@ namespace dxvk {
       const Rc<DxvkShader>&         shader,
             DxvkShaderPipelineLibrary* library);
 
+    /**
+     * \brief Prewarms a shader via compute pipeline compilation
+     * \param [in] shader Shader to prewarm
+     */
+    void prewarmShaderWithCompute(
+      const Rc<DxvkShader>&         shader,
+            DxvkShaderPipelineLibrary* library);
+
     DxvkShaderCache* getShaderCache() const {
       return m_shaderCache.get();
     }

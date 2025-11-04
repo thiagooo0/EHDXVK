@@ -637,7 +637,45 @@ namespace dxvk {
     }
   }
 
-  
+
+  void DxvkDevice::prewarmShaderWithCompute(
+    const Rc<DxvkShader>&         shader,
+          DxvkShaderPipelineLibrary* library) {
+    if (shader == nullptr)
+      return;
+
+    try {
+      if (library != nullptr)
+        Logger::ehang(str::format(
+          "Ignoring pipeline library when prewarming compute shader ",
+          shader->debugName(),
+          ": compute prewarm always uses monolithic pipelines"));
+
+      DxvkComputePipelineShaders shaders;
+      shaders.cs = shader;
+
+      auto pipeline = m_objects.pipelineManager().createComputePipeline(shaders);
+
+      if (pipeline == nullptr) {
+        Logger::ehang(str::format(
+          "Failed to acquire compute pipeline for prewarm ", shader->debugName()));
+        return;
+      }
+
+      DxvkComputePipelineStateInfo state;
+      pipeline->compilePipeline(state);
+
+      Logger::ehang(str::format(
+        "Prewarmed compute shader ", shader->debugName(),
+        " via DxvkComputePipeline::compilePipeline"));
+    } catch (const DxvkError& err) {
+      Logger::ehang(str::format(
+        "Exception during compute shader prewarm for ",
+        shader->debugName(), ": ", err.message()));
+    }
+  }
+
+
   void DxvkDevice::requestCompileShader(
     const Rc<DxvkShader>&           shader) {
     m_objects.pipelineManager().requestCompileShader(shader);

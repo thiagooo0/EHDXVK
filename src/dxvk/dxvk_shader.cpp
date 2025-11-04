@@ -1004,6 +1004,7 @@ namespace dxvk {
     const DxvkShaderPipelineLibraryKey& key,
     const DxvkBindingLayoutObjects* layout)
   : m_device      (device),
+    m_manager     (manager),
     m_stats       (&manager->m_stats),
     m_shaders     (key.getShaderSet()),
     m_layout      (layout) {
@@ -1043,10 +1044,46 @@ namespace dxvk {
       ? m_pipelineNoDepthClip
       : m_pipeline;
 
-    if (pipeline)
+    if (pipeline) {
+      if (m_shaders.cs && !m_reportedComputeReuse) {
+        Logger::ehang(str::format(
+          "Reusing compute pipeline library handle for shader ",
+          m_shaders.cs->getShaderKey().toString(),
+          " via acquirePipelineHandle"));
+        m_reportedComputeReuse = true;
+      }
       return pipeline;
+    }
+
+    bool wasCompiled = m_compiledOnce;
+
+    if (m_shaders.cs) {
+      Logger::ehang(str::format(
+        wasCompiled
+          ? "Recompiling compute pipeline library for shader "
+          : "Compiling compute pipeline library for shader ",
+        m_shaders.cs->getShaderKey().toString(),
+        " via acquirePipelineHandle"));
+    }
 
     pipeline = compileShaderPipelineLocked(args);
+
+    if (m_shaders.cs) {
+      if (pipeline) {
+        Logger::ehang(str::format(
+          wasCompiled
+            ? "Recompiled compute pipeline library for shader "
+            : "Compiled compute pipeline library for shader ",
+          m_shaders.cs->getShaderKey().toString(),
+          " via acquirePipelineHandle"));
+      } else {
+        Logger::ehang(str::format(
+          "Failed to compile compute pipeline library for shader ",
+          m_shaders.cs->getShaderKey().toString(),
+          " via acquirePipelineHandle"));
+      }
+    }
+
     return pipeline;
   }
 
@@ -1069,6 +1106,13 @@ namespace dxvk {
       return;
 
     // Compile the pipeline with default args
+    if (m_shaders.cs) {
+      Logger::ehang(str::format(
+        "Compiling compute pipeline library for shader ",
+        m_shaders.cs->getShaderKey().toString(),
+        " via compilePipeline"));
+    }
+
     VkPipeline pipeline = compileShaderPipelineLocked(
       DxvkShaderPipelineLibraryCompileArgs());
 
@@ -1084,6 +1128,20 @@ namespace dxvk {
 
     // Write back pipeline handle for future use
     m_pipeline = pipeline;
+
+    if (m_shaders.cs) {
+      if (pipeline) {
+        Logger::ehang(str::format(
+          "Compiled compute pipeline library for shader ",
+          m_shaders.cs->getShaderKey().toString(),
+          " via compilePipeline"));
+      } else {
+        Logger::ehang(str::format(
+          "Failed to compile compute pipeline library for shader ",
+          m_shaders.cs->getShaderKey().toString(),
+          " via compilePipeline"));
+      }
+    }
   }
 
 
@@ -1095,6 +1153,7 @@ namespace dxvk {
 
     m_pipeline = VK_NULL_HANDLE;
     m_pipelineNoDepthClip = VK_NULL_HANDLE;
+    m_reportedComputeReuse = false;
   }
 
 
@@ -1122,9 +1181,12 @@ namespace dxvk {
     // Increment stat counter the first time this
     // shader pipeline gets compiled successfully
     if (!m_compiledOnce) {
-      if (m_shaders.cs)
+      if (m_shaders.cs) {
         m_stats->numComputePipelines += 1;
-      else
+
+        if (m_manager)
+          m_manager->notifyComputeLibraryCompiled(m_shaders.cs);
+      } else
         m_stats->numGraphicsLibraries += 1;
 
       m_compiledOnce = true;
